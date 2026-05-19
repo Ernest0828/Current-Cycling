@@ -76,8 +76,9 @@ def process_spikes(df, col):
     window_offset = 50
     adjusted_peaks = [max(0, p-window_offset) for p in peaks]
 
-    df[event_col + "_spike"] = False
-    df.loc[adjusted_peaks, event_col + "_spike"] = True
+    spike_col = f"{col}_spike"
+    df[spike_col] = np.nan
+    df.loc[adjusted_peaks, spike_col] = df[col].max() #the bars will be vertical at max
 
     print(f"Detected {len(peaks)} spikes in column {col} using scipy find_peaks with height 0.06, distance 120, and prominence 0.03.")
 
@@ -91,7 +92,21 @@ def process_spikes(df, col):
     
     return df
 
-def process_new_csvs(folder_path, col, col2, col3, col4):
+
+def clean_cols(df):
+    #concat all columns that start with "AA03" into one column, and all columns that start with "Uncoated" into another column, then return the dataframe with only these 2 columns
+    aa03_cols = df.filter(regex=r'^AA03',axis=1)
+    uncoated_cols = df.filter(regex=r'^Uncoated|^Uncoted',axis=1)
+    se02_cols = df.filter(regex=r'^SE02',axis=1)
+    
+    return pd.DataFrame({
+        "Time": df["Time"],
+        "AA03": aa03_cols.mean(axis=1), #take the mean of all columns that start with AA03
+        "Uncoated": uncoated_cols.mean(axis=1), #take the mean of all columns that start with Uncoated
+        "SE02": se02_cols.mean(axis=1) #take the mean of all columns that start with SE02
+    })
+
+def process_new_csvs(folder_path, col, col2, col3):
     #folder_path = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs"
     master_file = os.path.join(folder_path, "master_logs.csv")
 
@@ -127,8 +142,10 @@ def process_new_csvs(folder_path, col, col2, col3, col4):
         try:
             print(f"Processing {file}...")
             df = read_data(file_path)
+            df = clean_cols(df)
+
             df = remove_outliers_rolling(df, col, window=20, threshold=5)
-            df = smoothen(df[[col, col2, col3, col4]], window_size=10)
+            df = smoothen(df[[col, col2, col3]], window_size=10)
 
             #df.to_csv(file_path.replace(".csv", "_smoothed.csv"), index=False)
 
@@ -138,11 +155,11 @@ def process_new_csvs(folder_path, col, col2, col3, col4):
             
             df = process_spikes(df, col)
             COLUMN_MAPPING = {
-                "AA03-1-2": "AA03_temp",
-                "Uncoated- 2": "uncoated_temp",
-                "AA03-2-2": "AA03_v2_temp",
-                "SE02-2": "SE02_temp",
-                f"{col}_spike": "spikes"
+                col: "AA03_temp",
+                col2: "uncoated_temp",
+                col3: "SE02_temp",
+                f"{col}_spike": "spikes",
+                'normalized_time': 'time',
             }
             df = df.rename(columns=COLUMN_MAPPING)
 
@@ -158,9 +175,11 @@ def process_new_csvs(folder_path, col, col2, col3, col4):
 
             df = df.reset_index(drop=True)
             df[index_col] = range(start_index, start_index + len(df))
-            #add an index column to the dataframe, which will be used as the timestamp in bigquery
+
+            seconds = df[index_col] - df[index_col].min()
+            df['normalized_time'] = seconds.apply(lambda x: f"{int(x//3600):02d}:{int((x%3600)//60):02d}:{int(x%60):02d}")
             
-            upload_to_bigquery(df, table_id)
+            upload_to_bigquery(df, table_id) # IMPORTANT PART FOR BIGQUERY
 
             master_df = pd.concat([master_df, df], ignore_index=True)
 
@@ -183,12 +202,13 @@ def process_new_csvs(folder_path, col, col2, col3, col4):
     else:
         print("No new files detected.")    
 
+
 def main():
-    FILE_FOLDER = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_1805"
+    FILE_FOLDER = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_0805_outside"
     #no need to connetc to session anymore, just loop through folder and check new files with timer of 300s
     while True:
         print("Starting loop, checking new files...")
-        processed_count = process_new_csvs(FILE_FOLDER, col="AA03-1-In", col2="Uncoated -2-In", col3="AA03-3-On surface", col4="Uncoted -3 - On surface")  # Function to process new CSV files
+        processed_count = process_new_csvs(FILE_FOLDER, col="AA03", col2="SE02", col3="Uncoated")  # Function to process new CSV files
         #if no new files, will print "No new files detected." and sleep for 300s before checking again
         if processed_count == 0:
             print("No new files detected.")
