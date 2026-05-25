@@ -8,7 +8,7 @@ import scipy
 import scipy.stats as stats 
 from scipy.signal import find_peaks
 
-from bigquery_loader import upload_to_bigquery
+#from bigquery_loader import upload_to_bigquery
 
 #1st step is to read the data
 #2nd step are to apply the necessary smoothening
@@ -58,55 +58,127 @@ table_id = 'our-lamp-495415-f5.flexlogger_data.temperature'
 #     return df
 
 #this detects spikes from rate of change, and returns the index, when thsi index is brought over to looker its shown as a vertical line on the graph
-def process_spikes(df, col):
+# def process_spikes(df, col):
+#     df = df.copy()
+
+#     #change_col = f"{col}_window_change"
+#     event_col = col
+#     #start_col = f"{col}_start"
+#     raw_gradient = df[event_col].diff().fillna(0)
+#     coat_gradient_smooth = raw_gradient.rolling(window=30, min_periods=1).mean()
+
+#     peaks, _ = find_peaks(
+#         coat_gradient_smooth, 
+#         height=0.08, #y-value (temp) threshold
+#         distance=30, #big distance to avoid multiple peaks
+#         prominence=0.05)  # How much peak stands out from the baseline
+
+#     window_offset = 50
+#     spike_starts = [max(0, p-window_offset) for p in peaks]
+
+#     rolling_gradient = coat_gradient_smooth.rolling(window=300, min_periods=1).mean()
+
+#     stable = rolling_gradient < 0.02
+
+#     stable_start_col = f"{col}_stable_start"
+#     stable_segment_col = f"{col}_stable_segment"
+
+#     df[stable_start_col] = np.nan
+#     df[stable_segment_col] = False
+
+#     stable_starts = []
+
+#     for i, spike_start in enumerate(spike_starts):
+#         next_spike_start = spike_starts[i+1] if i+1 < len(spike_starts) else len(df)
+
+#         search_area = stable.iloc[spike_start:next_spike_start]
+
+#         if search_area.any():
+#             stable_start = search_area[search_area].index[0]
+#             stable_starts.append(stable_start)
+    
+#     return df
+
+def detect_stable_segments(
+        df, col, 
+        smooth_window=30, #smmoth over 30s
+        gradient_window=30, #gradient avergaed over 30s
+        stable_threshold=0.03, #less than 0.02 deg is considered stable
+        min_stable_length=120, #shoudl be stable for at least 2 minutes
+        rise_threshold=0.07, #above 0.06 deg is considered rising
+        lookback_window=600): #look back after 10 min for a rise
     df = df.copy()
 
-    #change_col = f"{col}_window_change"
-    event_col = col
-    #start_col = f"{col}_start"
-    raw_gradient = df[event_col].diff().fillna(0)
-    coat_gradient_smooth = raw_gradient.rolling(window=30, min_periods=1).mean()
+    signal = df[col].rolling(window=smooth_window, min_periods=1).mean()
+    gradient = signal.diff().fillna(0)
+    gradient_smooth = gradient.rolling(window=gradient_window, min_periods=1).mean()
 
-    peaks, _ = find_peaks(
-        coat_gradient_smooth, 
-        height=0.06, #y-value (temp) threshold
-        distance=120, #big distance to avoid multiple peaks
-        prominence=0.03)  # How much peak stands out from the baseline
-    
-    window_offset = 50
-    adjusted_peaks = [max(0, p-window_offset) for p in peaks]
+    stable = gradient_smooth.abs() < stable_threshold
+    rising = gradient_smooth > rise_threshold
 
-    spike_col = f"{col}_spike"
-    df[spike_col] = np.nan
-    df.loc[adjusted_peaks, spike_col] = df[col].max() #the bars will be vertical at max
+    start_marker_col = f"{col}_stable_start_marker"
+    end_marker_col = f"{col}_stable_end_marker"
+    segment_col = f"{col}_stable_segment"
+    segment_id_col = f"{col}_segment_id"    
 
-    print(f"Detected {len(peaks)} spikes in column {col} using scipy find_peaks with height 0.06, distance 120, and prominence 0.03.")
+    df[start_marker_col] = np.nan
+    df[end_marker_col] = np.nan
+    df[segment_col] = False
+    df[segment_id_col] = np.nan
 
-    # window_change = df[col] - df[col].shift(window)
-    # is_spike = (window_change > threshold).fillna(False).astype(bool)
+    segment_id = (stable != stable.shift()).cumsum()
+    stable_segments = []
+    segment_number = 0
 
-    # previous_spike = is_spike.shift(1, fill_value=False).astype(bool)
+    for _, segment in df[stable].groupby(segment_id[stable]):
+        if len(segment) < min_stable_length:
+            continue
 
-    # df[event_col] = is_spike & ~previous_spike
-    # print(f"Detected {df[event_col].sum()} spikes in column {col} using window {window} and threshold {threshold}.")
-    
+        start_idx = segment.index[0]
+        end_idx = segment.index[-1]
+
+        #check whetehr there is a rise before the stable segment
+        lookback_start = max(0, start_idx - lookback_window)
+
+        had_recent_rise = rising.loc[lookback_start:start_idx].any()
+
+        if not had_recent_rise:
+            continue
+
+        segment_number += 1
+
+        stable_segments.append((start_idx, end_idx))
+
+        #start marker
+        df.loc[start_idx, start_marker_col] = df[col].max()
+        #end marker
+        df.loc[end_idx, end_marker_col] = df[col].max()
+        #segment marker
+        df.loc[start_idx:end_idx, segment_col] = True
+        #segment ID
+        df.loc[start_idx:end_idx, segment_id_col] = segment_number
+
+    print(f"Detected {len(stable_segments)} stable segments in column {col}")
+
     return df
 
 
 def clean_cols(df):
     #concat all columns that start with "AA03" into one column, and all columns that start with "Uncoated" into another column, then return the dataframe with only these 2 columns
-    aa03_cols = df.filter(regex=r'^AA03',axis=1)
-    uncoated_cols = df.filter(regex=r'^Uncoated|^Uncoted',axis=1)
+    aa03_cols = df.filter(regex=r'^AA03',axis=1) #example is AA03-1-1, AA03-1-2...
+    uncoated_cols = df.filter(regex=r'^UN-1',axis=1) #example is UN-1-1, UN-1-2... there are also UN-2-1, UN-2-2 but we will keep those separate as uncoated_2
     se02_cols = df.filter(regex=r'^SE02',axis=1)
+    uncoated_cols_2 = df.filter(regex=r'^UN-2',axis=1)
     
     return pd.DataFrame({
-        "Time": df["Time"],
+        #"Time": df["Time"],
         "AA03": aa03_cols.mean(axis=1), #take the mean of all columns that start with AA03
         "Uncoated": uncoated_cols.mean(axis=1), #take the mean of all columns that start with Uncoated
+        "Uncoated_2": uncoated_cols_2.mean(axis=1), #take the mean of all columns that start with Uncoated_2
         "SE02": se02_cols.mean(axis=1) #take the mean of all columns that start with SE02
     })
 
-def process_new_csvs(folder_path, col, col2, col3):
+def process_new_csvs(folder_path, col, col2, col3, col4):
     #folder_path = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs"
     master_file = os.path.join(folder_path, "master_logs.csv")
 
@@ -145,7 +217,7 @@ def process_new_csvs(folder_path, col, col2, col3):
             df = clean_cols(df)
 
             df = remove_outliers_rolling(df, col, window=20, threshold=5)
-            df = smoothen(df[[col, col2, col3]], window_size=10)
+            df = smoothen(df[[col, col2, col3, col4]], window_size=10)
 
             #df.to_csv(file_path.replace(".csv", "_smoothed.csv"), index=False)
 
@@ -153,15 +225,8 @@ def process_new_csvs(folder_path, col, col2, col3):
 
             #big query gets called here
             
-            df = process_spikes(df, col)
-            COLUMN_MAPPING = {
-                col: "AA03_temp",
-                col2: "uncoated_temp",
-                col3: "SE02_temp",
-                f"{col}_spike": "spikes",
-                'normalized_time': 'time',
-            }
-            df = df.rename(columns=COLUMN_MAPPING)
+            #df = detect_stable_segments(df, col)
+            
 
             # start_index = len(master_df)
             index_col = "index"
@@ -176,13 +241,39 @@ def process_new_csvs(folder_path, col, col2, col3):
             df = df.reset_index(drop=True)
             df[index_col] = range(start_index, start_index + len(df))
 
-            seconds = df[index_col] - df[index_col].min()
-            df['normalized_time'] = seconds.apply(lambda x: f"{int(x//3600):02d}:{int((x%3600)//60):02d}:{int(x%60):02d}")
+            seconds = df[index_col]
+            df['time'] = seconds.apply(
+                lambda x: pd.Timestamp("00:00:00") + pd.Timedelta(seconds=int(x))
+            ).dt.time
             
-            upload_to_bigquery(df, table_id) # IMPORTANT PART FOR BIGQUERY
+            COLUMN_MAPPING = {
+                col: "AA03_temp",
+                col2: "SE02_temp",
+                col3: "uncoated_temp",
+                col4: "uncoated_2_temp",
+            }
+            df = df.rename(columns=COLUMN_MAPPING)
+
+
+            #upload_to_bigquery(df, table_id) # IMPORTANT PART FOR BIGQUERY
 
             master_df = pd.concat([master_df, df], ignore_index=True)
+            #master_df = smoothen(master_df[["AA03_temp", "SE02_temp", "uncoated_temp", "uncoated_2_temp"]], window_size=10)
 
+            stable_cols = [
+                "stable_marker",
+                "stable_segment",
+                "AA03_temp_stable_marker",
+                "AA03_temp_stable_segment",
+            ]
+            master_df = master_df.drop(
+                columns=[c for c in stable_cols if c in master_df.columns]
+            )
+            master_df = detect_stable_segments(master_df, "AA03_temp")
+            master_df = master_df.rename(columns={
+                "AA03_temp_stable_marker": "stable_marker",
+                "AA03_temp_stable_segment": "stable_segment",
+            })
             updated = True 
 
             processed_files.add(file)
@@ -204,11 +295,12 @@ def process_new_csvs(folder_path, col, col2, col3):
 
 
 def main():
-    FILE_FOLDER = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_0805_outside"
+    FILE_FOLDER = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_2005"
+    #FILE_FOLDER = "/Users/oliverhigbee/Library/CloudStorage/GoogleDrive-oliver.higbee@assetcool.com/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_2005"
     #no need to connetc to session anymore, just loop through folder and check new files with timer of 300s
     while True:
         print("Starting loop, checking new files...")
-        processed_count = process_new_csvs(FILE_FOLDER, col="AA03", col2="SE02", col3="Uncoated")  # Function to process new CSV files
+        processed_count = process_new_csvs(FILE_FOLDER, col="AA03", col2="SE02", col3="Uncoated", col4="Uncoated_2")  # Function to process new CSV files
         #if no new files, will print "No new files detected." and sleep for 300s before checking again
         if processed_count == 0:
             print("No new files detected.")
