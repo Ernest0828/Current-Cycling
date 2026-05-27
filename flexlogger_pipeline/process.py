@@ -84,7 +84,7 @@ def process_new_csvs(folder_path, col, col2, col3, col4):
 
     updated = False    
 
-    for file in os.listdir(folder_path):
+    for file in sorted(os.listdir(folder_path)):
         if not file.endswith(".csv"):
             continue
 
@@ -186,8 +186,8 @@ def process_new_csvs(folder_path, col, col2, col3, col4):
 
 
 def main():
-    FILE_FOLDER = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_2005"
-    #FILE_FOLDER = "/Users/oliverhigbee/Library/CloudStorage/GoogleDrive-oliver.higbee@assetcool.com/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/test_2005"
+    FILE_FOLDER = "G:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/Quanta Project"
+    #FILE_FOLDER = "/Users/oliverhigbee/Library/CloudStorage/GoogleDrive-oliver.higbee@assetcool.com/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/Quanta Project"
     #no need to connetc to session anymore, just loop through folder and check new files with timer of 300s
     while True:
         print("Starting loop, checking new files...")
