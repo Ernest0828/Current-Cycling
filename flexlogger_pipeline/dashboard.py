@@ -22,9 +22,9 @@ master_file = os.path.join(full_path, "master_logs.csv")
 @st.cache_data(ttl=30)
 def load_data():
     return pd.read_csv(csv_url)
-if not os.path.exists(master_file):
-    st.warning("master_logs.csv does not exist yet")
-    st.stop()
+# if not os.path.exists(master_file):
+#     st.warning("master_logs.csv does not exist yet")
+#     st.stop()
 
 try:
     #df = pd.read_csv(master_file)
