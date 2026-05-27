@@ -3,7 +3,7 @@ import pandas as pd
 
 def detect_stable_segments(
         df, col, 
-        smooth_window=30, #smmoth over 30s
+        smooth_window=0, #smmoth over 30s
         gradient_window=30, #gradient avergaed over 30s
         stable_threshold=0.02, #less than 0.02 deg is considered stable
         min_stable_length=120, #shoudl be stable for at least 2 minutes
@@ -47,7 +47,7 @@ def detect_stable_segments(
         if not had_recent_rise:
             continue
 
-        max_stable_drift = 1.0
+        max_stable_drift = 1.8
         segment_drift = abs(df.loc[end_idx, col] - df.loc[start_idx, col])
 
         if segment_drift > max_stable_drift:
