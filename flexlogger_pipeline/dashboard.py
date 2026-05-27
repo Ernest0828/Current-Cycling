@@ -9,19 +9,26 @@ from functions import detect_stable_segments, smoothen
 st.set_page_config(layout="wide")
 st_autorefresh(interval=5000)  # Refresh every 5 seconds
 
+FILE_LINK = "https://drive.google.com/file/d/1tjzbtzE0oCvdu5gYZCwwuHM5bN_LbfLT/view"
+ID = "1tjzbtzE0oCvdu5gYZCwwuHM5bN_LbfLT"
+csv_url = f"https://drive.google.com/uc?export=download&id={ID}"
+
 folder_path = "g:/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/"
 #folder_path = "/Users/oliverhigbee/Library/CloudStorage/GoogleDrive-oliver.higbee@assetcool.com/Shared drives/Sharing - General/Technical/Data Analysis/Current Cycling/Logs/"
 designated_folder = "Quanta Project"
 full_path = os.path.join(folder_path, designated_folder)
 
 master_file = os.path.join(full_path, "master_logs.csv")
-
+@st.cache_data(ttl=30)
+def load_data():
+    return pd.read_csv(csv_url)
 if not os.path.exists(master_file):
     st.warning("master_logs.csv does not exist yet")
     st.stop()
 
 try:
-    df = pd.read_csv(master_file)
+    #df = pd.read_csv(master_file)
+    df = load_data()
 
     temp_cols = ["AA03_temp", "SE02_temp", "uncoated_temp", "uncoated_2_temp"]
     for temp in temp_cols:
